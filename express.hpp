@@ -15,9 +15,11 @@
 #ifndef CXXREST_EXPRESS_HPP
 #define CXXREST_EXPRESS_HPP
 
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <regex>
+#include <string_view>
 
 #include <sys/epoll.h>
 
@@ -38,7 +40,8 @@ namespace express {
     };
 
     namespace detail {
-        std::string statusCode(int s);
+        std::string_view statusCode(int s);
+
         struct RequestHeader {
         private:
             Method _method;
@@ -47,21 +50,20 @@ namespace express {
 
         private:
             static std::vector<std::string> Split(const std::string &string,
-                                                  const std::string &separator) {
+                                                  const std::string_view separator) {
                 auto list = std::vector<std::string>();
-                auto separator_length = separator.size();
 
-                if (separator_length == 0) {
-                    list.push_back(string);
+                if (const auto separator_length = separator.size(); separator_length == 0) {
+                    list.emplace_back(string);
                 } else {
-                    auto offset = std::string::size_type(0);
-                    while (1) {
-                        auto pos = string.find(separator, offset);
+                    std::string::size_type offset = 0;
+                    while (true) {
+                        const auto pos = string.find(separator, offset);
                         if (pos == std::string::npos) {
                             list.push_back(string.substr(offset));
                             break;
                         }
-                        list.push_back(string.substr(offset, pos - offset));
+                        list.emplace_back(string.substr(offset, pos - offset));
                         offset = pos + separator_length;
                     }
                 }
@@ -70,31 +72,31 @@ namespace express {
             }
             static std::string Lower(const std::string &s) {
                 std::string str(s.size(), 0);
-                std::transform(std::begin(s), std::end(s), std::begin(str), ::tolower);
+                std::transform(std::begin(s), std::end(s), std::begin(str), tolower);
                 return str;
             }
 
             static std::string Trim(const std::string &string,
                                     const char *trimCharacterList = " \t\v\r\n") {
                 std::string result;
-                std::string::size_type left = string.find_first_not_of(trimCharacterList);
 
-                if (left != std::string::npos) {
-                    std::string::size_type right = string.find_last_not_of(trimCharacterList);
+                if (const std::string::size_type left = string.find_first_not_of(trimCharacterList);
+                    left != std::string::npos) {
+                    const std::string::size_type right = string.find_last_not_of(trimCharacterList);
                     result = string.substr(left, right - left + 1);
                 }
                 return result;
             }
 
         public:
-            RequestHeader(Method method, std::string path,
+            RequestHeader(const Method method, std::string path,
                           std::unordered_map<std::string, std::string> kv)
                 : _method(method)
                 , _path(std::move(path))
                 , _kv(std::move(kv)) {}
 
             static RequestHeader Parse(const std::string &header) {
-                Method method;
+                auto method = Method::GET;
                 std::string path;
                 std::unordered_map<std::string, std::string> kv;
 
@@ -115,7 +117,7 @@ namespace express {
                 std::vector<std::pair<std::string, std::string>> kvs(lines.size() - 1);
                 std::transform(std::begin(lines) + 1, std::end(lines), std::begin(kvs),
                                [](const std::string &line) -> std::pair<std::string, std::string> {
-                                   auto ll = Split(line, ":");
+                                   const auto ll = Split(line, ":");
                                    if (ll.size() <= 1) {
                                        return {"", ""};
                                    }
@@ -125,17 +127,19 @@ namespace express {
                                });
 
                 kv.insert(std::begin(kvs), std::end(kvs));
-                return RequestHeader(method, std::move(top[1]), std::move(kv));
+                return {method, std::move(top[1]), std::move(kv)};
             }
 
         public:
-            Method method() const noexcept { return _method; }
-            const std::string &path() const { return _path; }
+            [[nodiscard]] Method method() const noexcept { return _method; }
+            [[nodiscard]] const std::string &path() const { return _path; }
 
-            const std::unordered_map<std::string, std::string> &headers() const { return _kv; }
+            [[nodiscard]] const std::unordered_map<std::string, std::string> &headers() const {
+                return _kv;
+            }
 
-            std::string operator[](const std::string &key) const {
-                auto itr = headers().find(Lower(key));
+            [[nodiscard]] std::string operator[](const std::string &key) const {
+                const auto itr = headers().find(Lower(key));
                 if (itr == std::end(headers())) {
                     return "";
                 }
@@ -169,8 +173,7 @@ namespace express {
         const std::string &body() const { return _body; }
 
         std::string params(const std::string &key) const {
-            auto itr = _pathFragments.find(key);
-            if (itr == std::end(_pathFragments)) {
+            if (const auto itr = _pathFragments.find(key); itr == std::end(_pathFragments)) {
                 return "";
             }
             return _pathFragments.at(key);
@@ -186,7 +189,7 @@ namespace express {
         std::string _body;
 
     public:
-        explicit Response(int sock)
+        explicit Response(const int sock)
             : _socket(sock)
             , _headers({{"connection", "close"},
                         {"content-type", "text/plain"},
@@ -195,14 +198,14 @@ namespace express {
             , _body() {}
 
     public:
-        void sendStatus(int status) {
+        void sendStatus(const int status) {
             _status = status;
             end();
         }
 
         void header(const std::string &key, const std::string &value) { _headers[key] = value; }
 
-        void end(int status, std::string body) {
+        void end(const int status, std::string body) {
             _status = status;
             end(std::move(body));
         }
@@ -215,14 +218,14 @@ namespace express {
         void end() {
             std::stringstream ss;
             ss << "HTTP/1.1 " << _status << " " << detail::statusCode(_status) << REST_HTTP_NEWLINE;
-            for (const auto &kv : _headers) {
-                ss << kv.first << ": " << kv.second << REST_HTTP_NEWLINE;
+            for (const auto &[key, value] : _headers) {
+                ss << key << ": " << value << REST_HTTP_NEWLINE;
             }
             ss << REST_HTTP_NEWLINE;
             ss << _body << REST_HTTP_NEWLINE;
 
-            auto str = ss.str();
-            ::write(_socket, str.c_str(), str.size());
+            const auto str = ss.str();
+            write(_socket, str.c_str(), str.size());
         }
     };
 
@@ -241,24 +244,23 @@ namespace express {
 
         public:
             Handler() = default;
-            Handler(Method method, std::regex path, std::vector<std::string> ids,
+            Handler(const Method method, std::regex path, std::vector<std::string> ids,
                     HandlerType handler)
                 : _method(method)
                 , _path(std::move(path))
-                , _id(std::move(ids))
-                , _handler(std::move(handler)) {}
+                , _handler(std::move(handler))
+                , _id(std::move(ids)) {}
             Handler(const Handler &) = default;
             Handler(Handler &&) = default;
 
             Handler &operator=(const Handler &) = default;
             Handler &operator=(Handler &&) = default;
 
-        public:
-            bool is(Method method, const std::string &path) const {
+            [[nodiscard]] bool is(const Method method, const std::string &path) const {
                 return _method == method && std::regex_match(path, _path);
             }
 
-            std::unordered_map<std::string, std::string>
+            [[nodiscard]] std::unordered_map<std::string, std::string>
             createPathFragment(const std::string &path) const {
                 std::unordered_map<std::string, std::string> fragments;
 
@@ -278,12 +280,23 @@ namespace express {
         std::vector<HandlerType> _beforeRequest;
         bool _isRunning;
 
+    public:
+        Express() = default;
+
+        Express(const Express &) = default;
+        Express(Express &&) = default;
+
+        Express &operator=(const Express &) = default;
+        Express &operator=(Express &&) = default;
+
+        ~Express() = default;
+
     private:
         static std::pair<std::regex, std::vector<std::string>>
         _pathToRegex(const std::string &path) {
             static const std::regex COLON_REGEX(R"(:(\w+))");
             auto first = path.cbegin();
-            auto last = path.cend();
+            const auto last = path.cend();
 
             std::vector<std::string> ids;
 
@@ -304,15 +317,13 @@ namespace express {
             return *this;
         }
 
-        Express &use(Method method, const std::string &path, const HandlerType &handler) {
+        Express &use(const Method method, const std::string &path, const HandlerType &handler) {
             std::clog << path << std::endl;
-            auto pi = _pathToRegex(path);
-            Handler h(method, std::move(pi.first), std::move(pi.second), std::move(handler));
-            _handlers.emplace_back(std::move(h));
+            auto [r, i] = _pathToRegex(path);
+            _handlers.emplace_back(method, std::move(r), std::move(i), handler);
             return *this;
         }
 
-    public:
         Express &get(const std::string &path, const HandlerType &handler) {
             std::clog << "GET ";
             return use(Method::GET, path, handler);
@@ -334,21 +345,22 @@ namespace express {
         }
 
     private:
-        void doProcess(int sock) const {
+        void doProcess(const int sock) const {
             Response res(sock);
 
             std::string headerStr;
             std::string bodyStr;
             while (true) {
                 char buf[1024] = {};
-                auto dlen = ::read(sock, &buf, sizeof(buf));
+                const auto dlen = read(sock, &buf, sizeof(buf));
                 if (dlen <= 0)
                     continue;
 
                 headerStr.append(buf, dlen);
-                auto terminalPos = headerStr.find(REST_HTTP_NEWLINE REST_HTTP_NEWLINE);
-                if (terminalPos != std::string::npos) {
-                    bodyStr.assign(std::begin(headerStr) + terminalPos + 3, std::end(headerStr));
+                if (const auto terminalPos = headerStr.find(REST_HTTP_NEWLINE REST_HTTP_NEWLINE);
+                    terminalPos != std::string::npos) {
+                    bodyStr.assign(std::begin(headerStr) + static_cast<int>(terminalPos + 3),
+                                   std::end(headerStr));
                     headerStr.erase(terminalPos);
                     break;
                 }
@@ -359,10 +371,10 @@ namespace express {
             switch (reqHeader.method()) {
             case Method::POST:
             case Method::PUT: {
-                auto lengthStr = reqHeader["content-length"];
-                int length = 0;
+                const auto lengthStr = reqHeader["content-length"];
+                unsigned long length = 0;
                 try {
-                    length = std::stoi(lengthStr);
+                    length = std::stoul(lengthStr);
                 } catch (const std::invalid_argument &e) {
                     std::cout << e.what() << " " << lengthStr << std::endl;
                     res.sendStatus(400); // bad request
@@ -372,7 +384,7 @@ namespace express {
                 length -= bodyStr.size();
                 while (length > 0) {
                     char buf[1024] = {};
-                    auto rl = ::read(sock, &buf, std::min<std::size_t>(sizeof(buf), length));
+                    const auto rl = read(sock, &buf, std::min<std::size_t>(sizeof(buf), length));
 
                     bodyStr.append(buf, rl);
                     length -= rl;
@@ -398,26 +410,27 @@ namespace express {
             close(sock);
         }
 
-        void doAccept(int acceptSock) const {
+        void doAccept(const int acceptSock) const {
             sockaddr_in client = {};
             socklen_t len = sizeof(client);
-            auto sock = ::accept(acceptSock, (struct sockaddr *)&client, &len);
+            const auto sock =
+                accept(acceptSock, static_cast<sockaddr *>(static_cast<void *>(&client)), &len);
             doProcess(sock);
         }
 
     public:
-        void listen(std::uint16_t port = 8080) {
+        void listen(const std::uint16_t port = 8080) {
             _isRunning = true;
 
-            auto sock = socket(AF_INET, SOCK_STREAM, 0);
+            const auto sock = socket(AF_INET, SOCK_STREAM, 0);
             if (sock < 0) {
-                ::perror("socket");
+                perror("socket");
                 std::exit(1);
             }
 
             int yes;
-            if (::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes)) < 0) {
-                ::perror("setsockopt");
+            if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) < 0) {
+                perror("setsockopt");
                 std::exit(2);
             }
 
@@ -425,13 +438,13 @@ namespace express {
             addr.sin_family = AF_INET;
             addr.sin_port = htons(port);
             addr.sin_addr.s_addr = INADDR_ANY;
-            if (::bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-                ::perror("bind");
+            if (bind(sock, static_cast<sockaddr *>(static_cast<void *>(&addr)), sizeof(addr)) < 0) {
+                perror("bind");
                 std::exit(2);
             }
 
             if (::listen(sock, 10) < 0) {
-                ::perror("listen");
+                perror("listen");
                 std::exit(3);
             }
 
@@ -439,7 +452,7 @@ namespace express {
 
             int epfd;
             if ((epfd = epoll_create(MAX_EVENTS)) < 0) {
-                ::perror("epoll_create");
+                perror("epoll_create");
                 std::exit(4);
             }
 
@@ -448,17 +461,17 @@ namespace express {
             event.data.fd = sock;
 
             if (epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &event) < 0) {
-                ::perror("epoll_ctl");
+                perror("epoll_ctl");
                 exit(5);
             }
 
             std::clog << "Listening on http://0.0.0.0:" << port << std::endl;
 
-            struct epoll_event events[MAX_EVENTS];
             while (_isRunning) {
-                auto nfd = epoll_wait(epfd, events, MAX_EVENTS, -1);
+                epoll_event events[MAX_EVENTS];
+                const auto nfd = epoll_wait(epfd, events, MAX_EVENTS, -1);
                 if (nfd < 0) {
-                    ::perror("epoll_wait");
+                    perror("epoll_wait");
                     std::exit(6);
                 }
 
@@ -469,14 +482,14 @@ namespace express {
                 }
             }
 
-            ::close(sock);
+            close(sock);
         }
 
         void stop() { _isRunning = false; }
     };
 
     namespace detail {
-        std::string statusCode(int s) {
+        inline std::string_view statusCode(const int s) {
 #define CODE(code, msg)                                                                            \
     case code:                                                                                     \
         return msg
